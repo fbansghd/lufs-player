@@ -195,8 +195,8 @@ export default function Player() {
     setContextMenu(null)
   }
 
-  // 再生停止
-  const stopPlayback = () => {
+  // 再生停止（resetPosition: trueで再生位置もリセット）
+  const stopPlayback = (resetPosition = true) => {
     if (sourceNodeRef.current) {
       sourceNodeRef.current.onended = null
       sourceNodeRef.current.stop()
@@ -206,14 +206,17 @@ export default function Player() {
       cancelAnimationFrame(animationFrameRef.current)
     }
     setIsPlaying(false)
-    setCurrentTime(0)
-    pausedAtRef.current = 0
+    if (resetPosition) {
+      setCurrentTime(0)
+      pausedAtRef.current = 0
+    }
   }
 
   // 曲の再生
   const playSong = async (index) => {
     try {
-      stopPlayback()
+      const startOffset = pausedAtRef.current  // stopPlayback前に保存
+      stopPlayback(false)  // 位置リセットしない
 
       const song = songs[index]
       if (!song) return
@@ -223,9 +226,14 @@ export default function Player() {
         audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
         normalizeGainRef.current = audioContextRef.current.createGain()
         masterGainRef.current = audioContextRef.current.createGain()
-        
+
         normalizeGainRef.current.connect(masterGainRef.current)
         masterGainRef.current.connect(audioContextRef.current.destination)
+      }
+
+      // AudioContextがsuspended状態なら再開
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume()
       }
 
       // ファイル読み込み
@@ -245,8 +253,8 @@ export default function Player() {
       
       // 再生
       const songDuration = audioBufferRef.current.duration
-      const startOffset = pausedAtRef.current
       sourceNodeRef.current.start(0, startOffset)
+      pausedAtRef.current = 0  // 再生開始後にリセット
       startTimeRef.current = performance.now()
       setDuration(songDuration)
       setCurrentTime(startOffset)
@@ -305,16 +313,16 @@ export default function Player() {
   }
 
   // 再生/停止トグル
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (isPlaying) {
-      if (sourceNodeRef.current) {
-        sourceNodeRef.current.onended = null
-        sourceNodeRef.current.stop()
-        sourceNodeRef.current = null
-      }
+      // 一時停止
       pausedAtRef.current = currentTime
-      setIsPlaying(false)
+      stopPlayback(false)  // 位置をリセットしない
     } else {
+      // 再生再開
+      if (audioContextRef.current?.state === 'suspended') {
+        await audioContextRef.current.resume()
+      }
       if (currentIndex !== null) {
         playSong(currentIndex)
       } else if (songs.length > 0) {

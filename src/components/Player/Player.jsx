@@ -212,6 +212,24 @@ export default function Player() {
     }
   }
 
+  // AudioContextの初期化・復旧
+  const ensureAudioContext = async () => {
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume()
+      }
+      if (audioContextRef.current.state === 'running') return
+      // resume後もrunningにならなければ再作成
+      audioContextRef.current.close().catch(() => {})
+    }
+
+    audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    normalizeGainRef.current = audioContextRef.current.createGain()
+    masterGainRef.current = audioContextRef.current.createGain()
+    normalizeGainRef.current.connect(masterGainRef.current)
+    masterGainRef.current.connect(audioContextRef.current.destination)
+  }
+
   // 曲の再生
   const playSong = async (index) => {
     try {
@@ -221,20 +239,8 @@ export default function Player() {
       const song = songs[index]
       if (!song) return
 
-      // AudioContextの初期化
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
-        normalizeGainRef.current = audioContextRef.current.createGain()
-        masterGainRef.current = audioContextRef.current.createGain()
-
-        normalizeGainRef.current.connect(masterGainRef.current)
-        masterGainRef.current.connect(audioContextRef.current.destination)
-      }
-
-      // AudioContextがsuspended状態なら再開
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume()
-      }
+      // AudioContextの初期化・復旧
+      await ensureAudioContext()
 
       // ファイル読み込み
       const fileData = await readBinaryFile(song.path)
@@ -313,16 +319,12 @@ export default function Player() {
   }
 
   // 再生/停止トグル
-  const togglePlay = async () => {
+  const togglePlay = () => {
     if (isPlaying) {
       // 一時停止
       pausedAtRef.current = currentTime
       stopPlayback(false)  // 位置をリセットしない
     } else {
-      // 再生再開
-      if (audioContextRef.current?.state === 'suspended') {
-        await audioContextRef.current.resume()
-      }
       if (currentIndex !== null) {
         playSong(currentIndex)
       } else if (songs.length > 0) {

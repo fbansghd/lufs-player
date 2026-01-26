@@ -224,6 +224,9 @@ export default function Player() {
     }
 
     audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+    if (audioContextRef.current.state !== 'running') {
+      await audioContextRef.current.resume()
+    }
     normalizeGainRef.current = audioContextRef.current.createGain()
     masterGainRef.current = audioContextRef.current.createGain()
     normalizeGainRef.current.connect(masterGainRef.current)
@@ -324,6 +327,11 @@ export default function Player() {
       // 一時停止
       pausedAtRef.current = currentTime
       stopPlayback(false)  // 位置をリセットしない
+      // AudioContextを閉じて復帰時に再作成させる（OS中断対策）
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {})
+        audioContextRef.current = null
+      }
     } else {
       if (currentIndex !== null) {
         playSong(currentIndex)

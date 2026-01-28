@@ -86,10 +86,10 @@ export default function Player() {
 
       for (const filePath of files) {
         const fileData = await readBinaryFile(filePath)
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+        const offlineCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 1, 44100)
         const arrayBuffer = fileData.buffer
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
-        
+        const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
+
         const lufs = calculateLUFS(audioBuffer)
         const gain = calculateGain(lufs, normalizeTarget)
 
@@ -101,8 +101,6 @@ export default function Player() {
           lufs,
           gain
         })
-
-        audioContext.close()
       }
 
       const updatedSongs = [...songs, ...newSongs]
@@ -145,9 +143,9 @@ export default function Player() {
       const newSongs = []
       for (const filePath of mp3Files) {
         const fileData = await readBinaryFile(filePath)
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+        const offlineCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 1, 44100)
         const arrayBuffer = fileData.buffer
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+        const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
 
         const lufs = calculateLUFS(audioBuffer)
         const gain = calculateGain(lufs, normalizeTarget)
@@ -160,8 +158,6 @@ export default function Player() {
           lufs,
           gain
         })
-
-        audioContext.close()
       }
 
       const updatedSongs = [...songs, ...newSongs]
@@ -199,7 +195,15 @@ export default function Player() {
   const stopPlayback = (resetPosition = true) => {
     if (sourceNodeRef.current) {
       sourceNodeRef.current.onended = null
-      sourceNodeRef.current.stop()
+      // フェードアウトしてからstop（クリックノイズ防止）
+      if (normalizeGainRef.current && audioContextRef.current && audioContextRef.current.state === 'running') {
+        const now = audioContextRef.current.currentTime
+        normalizeGainRef.current.gain.setValueAtTime(normalizeGainRef.current.gain.value, now)
+        normalizeGainRef.current.gain.linearRampToValueAtTime(0, now + 0.005)
+        sourceNodeRef.current.stop(now + 0.005)
+      } else {
+        sourceNodeRef.current.stop()
+      }
       sourceNodeRef.current = null
     }
     if (animationFrameRef.current) {
@@ -228,6 +232,7 @@ export default function Player() {
       await audioContextRef.current.resume()
     }
     normalizeGainRef.current = audioContextRef.current.createGain()
+    normalizeGainRef.current.gain.value = 0
     masterGainRef.current = audioContextRef.current.createGain()
     normalizeGainRef.current.connect(masterGainRef.current)
     masterGainRef.current.connect(audioContextRef.current.destination)
@@ -254,9 +259,12 @@ export default function Player() {
       sourceNodeRef.current = audioContextRef.current.createBufferSource()
       sourceNodeRef.current.buffer = audioBufferRef.current
       
-      // ゲイン設定
-      normalizeGainRef.current.gain.value = song.gain
-      masterGainRef.current.gain.value = masterVolume
+      // ゲイン設定（クリックノイズ防止のためフェードイン）
+      const now = audioContextRef.current.currentTime
+      normalizeGainRef.current.gain.cancelScheduledValues(0)
+      normalizeGainRef.current.gain.setValueAtTime(0, now)
+      normalizeGainRef.current.gain.linearRampToValueAtTime(song.gain, now + 0.005)
+      masterGainRef.current.gain.setValueAtTime(masterVolume, now)
 
       sourceNodeRef.current.connect(normalizeGainRef.current)
       
@@ -327,11 +335,6 @@ export default function Player() {
       // 一時停止
       pausedAtRef.current = currentTime
       stopPlayback(false)  // 位置をリセットしない
-      // AudioContextを閉じて復帰時に再作成させる（OS中断対策）
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => {})
-        audioContextRef.current = null
-      }
     } else {
       if (currentIndex !== null) {
         playSong(currentIndex)
@@ -383,11 +386,14 @@ export default function Player() {
   // 初期化
   useEffect(() => {
     loadPlaylist()
-    return () => {
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
-      }
-    }
+    // AudioContextを事前初期化（初回再生時のハードウェアクリック防止）
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    audioContextRef.current = ctx
+    normalizeGainRef.current = ctx.createGain()
+    normalizeGainRef.current.gain.value = 0
+    masterGainRef.current = ctx.createGain()
+    normalizeGainRef.current.connect(masterGainRef.current)
+    masterGainRef.current.connect(ctx.destination)
   }, [])
 
   // シャッフル更新
